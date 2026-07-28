@@ -1,0 +1,225 @@
+---
+title: "Customer Churn: Data Preparation Variable Selection"
+author: "Alex Brander"
+date: "2026-07-28"
+format:
+  html:
+    toc: true
+    code-fold: true
+    code-summary: "Show code"
+    number-sections: true
+---
+
+## Overview
+
+Customer churn is an important concern for subscription-based businesses because the loss of existing customers can reduce recurring revenue and increase the need for costly customer acquisition efforts. This analysis uses a telecommunications customer dataset to prepare the data for predictive modeling and identify a useful set of variables for estimating churn risk.
+
+The objective of this stage of the project is to construct a clean and reproducible modeling dataset, divide the observations into training and testing samples, and evaluate candidate predictors through logistic regression variable selection. The resulting data and predictor set will be used in subsequent modeling and retention-strategy analyses.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Required Packages
+
+The analysis uses `tidyverse` for data manipulation and `caTools` for creating a stratified training and testing split. Loading the required packages at the beginning of the document makes the analytical dependencies explicit and improves reproducibility.
+
+```{r message=FALSE, warning=FALSE}
+library(caTools)
+library(tidyverse)
+```
+
+## Data Import and Preparation
+
+The Telco Customer Churn dataset is imported from a CSV file and copied to a shorter working object named `churn`. A separate object, `churn_clean`, is then created so that the raw imported data remain unchanged.
+
+Several preprocessing steps are required before the data can be used in a classification model. `TotalCharges` is converted to a numeric variable because blank values in the original file may cause it to be imported as text. The response variable, `Churn`, is encoded as a factor with `"No"` as the reference category and `"Yes"` as the event of interest. `SeniorCitizen` is also converted from its numeric coding into descriptive factor labels.
+
+The customer identification field is removed because it uniquely identifies individual records but does not provide meaningful predictive information. Observations without a valid value for `TotalCharges` are removed, and the remaining character variables are converted to factors so that they are handled appropriately by the statistical models.
+
+```{r}
+Telco_Customer_Churn <- read.csv("Telco-Customer-Churn.csv")
+
+churn <- Telco_Customer_Churn
+
+churn_clean <- churn %>%
+  mutate(
+    TotalCharges = na_if(as.character(TotalCharges), ""),
+    TotalCharges = as.numeric(TotalCharges),
+    Churn = factor(
+      Churn,
+      levels = c("No", "Yes")
+    ),
+    SeniorCitizen = factor(
+      SeniorCitizen,
+      levels = c(0, 1),
+      labels = c("No", "Yes")
+    )
+  ) %>%
+  select(-customerID) %>%
+  drop_na(TotalCharges) %>%
+  mutate(across(where(is.character), as.factor))
+```
+
+The resulting `churn_clean` dataset contains variables in formats appropriate for statistical modeling. In particular, the binary outcome has a clearly defined event category, categorical predictors are represented as factors, and the non-predictive customer identifier has been excluded.
+
+Removing records with missing `TotalCharges` ensures that all observations passed to the models contain complete values for the included predictors. Because deletion can affect the representativeness of the sample, the number of removed observations should also be documented.
+
+This summary documents the effect of preprocessing and confirms the final dimensions of the modeling dataset.
+
+```{r}
+tibble(
+  raw_observations = nrow(churn),
+  cleaned_observations = nrow(churn_clean),
+  removed_observations = nrow(churn) - nrow(churn_clean),
+  remaining_variables = ncol(churn_clean)
+)
+```
+
+## Data-Quality Verification
+
+Before creating the modeling samples, the cleaned dataset is inspected to confirm its dimensions, variable classes, missing-value status, and churn distribution. These checks reduce the risk of carrying data-formatting errors into the modeling stage.
+
+```{r}
+glimpse(churn_clean)
+
+colSums(is.na(churn_clean))
+
+table(churn_clean$Churn)
+prop.table(table(churn_clean$Churn))
+```
+
+The structure output should confirm that continuous measures such as tenure, monthly charges, and total charges are numeric, while service and customer-characteristic variables are categorical. The missing-value check should return zero for every retained variable.
+
+The churn frequency table also provides an initial assessment of class balance. If non-churning customers substantially outnumber churning customers, overall accuracy alone may provide a misleading measure of model performance. Later model comparisons should therefore include sensitivity, specificity, precision, F1 score, and ROC-AUC.
+
+## Training and Testing Samples
+
+To evaluate predictive performance on observations that are not used to estimate the model, the cleaned data are divided into separate training and testing samples. The training sample contains 80% of the observations and is used for model development and variable selection. The remaining 20% form an independent test sample that will be reserved for final performance evaluation.
+
+The split is stratified using the churn outcome, which helps preserve approximately the same proportion of churn cases in both samples. A fixed random seed is used so that the split can be reproduced.
+
+```{r}
+set.seed(619)
+
+split <- sample.split(
+  churn_clean$Churn,
+  SplitRatio = 0.80
+)
+
+train <- subset(churn_clean, split == TRUE)
+test <- subset(churn_clean, split == FALSE)
+
+split_summary <- tibble(
+  sample = c("Training", "Testing"),
+  observations = c(nrow(train), nrow(test)),
+  churn_rate = c(
+    mean(train$Churn == "Yes"),
+    mean(test$Churn == "Yes")
+  )
+)
+
+split_summary
+```
+
+The training and testing churn rates should be similar because the split was stratified by the response variable. This supports a fairer comparison between model development results and final out-of-sample performance.
+
+All variable-selection decisions will be made using the training data only. The test data will remain untouched until the final model has been selected, which helps prevent information leakage and overly optimistic performance estimates.
+
+## Candidate Logistic-Regression Models
+
+Logistic regression is used because the response variable has two possible outcomes: the customer either churned or did not churn. The model estimates the probability that a customer belongs to the `"Yes"` churn category as a function of the available customer, account, and service characteristics.
+
+Two models define the range of possible specifications considered during variable selection. The null model contains only an intercept and represents a baseline model with no predictors. The full model contains all available candidate predictors after preprocessing.
+
+```{r}
+null_model <- glm(
+  Churn ~ 1,
+  data = train,
+  family = binomial
+)
+
+full_model <- glm(Churn~ gender+ SeniorCitizen + Partner + Dependents + tenure + PhoneService+ MultipleLines +InternetService + OnlineSecurity + OnlineBackup + DeviceProtection + TechSupport + StreamingTV + StreamingMovies + Contract + PaperlessBilling + PaymentMethod + MonthlyCharges+ TotalCharges, data= train, family =binomial)
+```
+
+The null and full models are not yet treated as final predictive models. Instead, they establish the lower and upper boundaries for the stepwise selection procedures. The null model represents the absence of predictor information, while the full model represents the most complex candidate specification.
+
+## Forward Variable Selection
+
+Forward stepwise selection begins with the intercept-only model and adds predictors sequentially. At each step, the procedure evaluates which eligible addition produces the greatest improvement according to the Akaike Information Criterion (AIC).
+
+AIC balances model fit against complexity. Lower values are preferred because they indicate a more favorable tradeoff between explanatory performance and the number of estimated parameters. The procedure stops when adding another variable no longer reduces AIC.
+
+```{r}
+#| code-fold: true
+#| output: true
+# stepwise code
+forward_model <- step(null_model,
+                      scope= list(lower= null_model, upper= full_model),
+                      direction= "forward")
+
+```
+
+```{r}
+formula(forward_model)
+AIC(forward_model)
+```
+
+The final reported AIC was approximately 4721.5. At that stage, adding device protection, online backup, partner status, or gender did not produce a lower AIC, so the procedure stopped.
+
+Displaying only the selected formula and final AIC provides a concise summary for readers, while the full stepwise search output can be hidden inside a collapsible code section.
+
+## Backward Variable Selection
+
+Backward stepwise selection approaches the same problem from the opposite direction. It begins with the full logistic-regression model and removes predictors when their exclusion lowers AIC. This provides a useful comparison with forward selection because the two procedures begin from different model specifications and may follow different selection paths.
+
+Agreement between the final forward and backward models would provide some evidence that the selected predictor set is relatively stable under AIC-based stepwise selection. Disagreement would indicate that the chosen specification depends on the direction of the search.
+
+```{r}
+#| code-fold: true
+#| output: true
+# stepwise code
+backward_model <- step(full_model,
+                       direction = "backward"
+)
+```
+
+```{r}
+formula(backward_model)
+AIC(backward_model)
+```
+
+This concise output records the final backward-selected model and allows its AIC to be compared with the forward-selected alternative.
+
+## Comparison of Variable-Selection Results
+
+The forward and backward procedures are compared using their final AIC values and retained numbers of model parameters. A lower AIC indicates a more favorable balance between model fit and complexity, but small differences in AIC should not automatically be interpreted as meaningful improvements in predictive performance.
+
+```{r}
+model_comparison <- tibble(
+  model = c("Forward selection", "Backward selection"),
+  AIC = c(AIC(forward_model), AIC(backward_model)),
+  parameters = c(
+    length(coef(forward_model)),
+    length(coef(backward_model))
+  )
+)
+
+model_comparison
+```
+
+The model with the lower AIC is preferred under the stepwise-selection criterion. However, final model selection will also consider predictive performance through cross-validation and evaluation on the reserved test set.
+
+This distinction is important because AIC measures relative in-sample model quality, whereas the central goal of the project is to identify customers at risk of future churn. A model with a slightly lower AIC may not necessarily produce better classification results on new customers.
+
+## Limitations of Stepwise Selection
+
+Stepwise selection provides an accessible method for reducing a large candidate model, but it has important limitations. The selected variables can be sensitive to the specific sample, correlated predictors, and the direction of the search. Repeated hypothesis tests during selection can also make conventional coefficient-level significance results appear stronger than they are.
+
+For these reasons, the stepwise model will be treated as one candidate rather than as definitive evidence of the variables that cause churn. Its performance should be compared with the full logistic model and with regularized or nonparametric classification methods using cross-validation and an untouched test sample.
+
+## Conclusion
+
+This stage of the analysis produced a cleaned and model-ready customer churn dataset. Blank values in `TotalCharges` were converted and handled, categorical variables were encoded as factors, and the customer identifier was removed. The observations were then divided into stratified training and testing samples, with the testing sample reserved for final model evaluation.
+
+Forward and backward AIC-based selection were applied to the training data to identify more concise logistic-regression specifications.
