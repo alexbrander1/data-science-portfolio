@@ -27,6 +27,7 @@ The analysis uses `tidyverse` for data manipulation and `caTools` for creating a
 ```{r message=FALSE, warning=FALSE}
 library(caTools)
 library(tidyverse)
+library(readxl)
 ```
 
 ## Data Import and Preparation
@@ -38,7 +39,7 @@ Several preprocessing steps are required before the data can be used in a classi
 The customer identification field is removed because it uniquely identifies individual records but does not provide meaningful predictive information. Observations without a valid value for `TotalCharges` are removed, and the remaining character variables are converted to factors so that they are handled appropriately by the statistical models.
 
 ```{r}
-Telco_Customer_Churn <- read.csv("Telco-Customer-Churn.csv")
+Telco_Customer_Churn <- read_excel("Telco-Customer-Churn.xlsx")
 
 churn <- Telco_Customer_Churn
 
