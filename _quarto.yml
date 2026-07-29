@@ -1,5 +1,19 @@
 project:
-  title: "data-science-portfolio"
+  type: website
+  output-dir: docs
 
+website:
+  title: "Alex Brander | Data Science Portfolio"
 
+  navbar:
+    left:
+      - href: index.qmd
+        text: Data Preparation
+      - href: churn-class-imbalance.qmd
+        text: Class Imbalance
 
+format:
+  html:
+    toc: true
+    code-fold: true
+    code-summary: "Show code"
